@@ -1,0 +1,983 @@
+Desarrolla un ejercicio personal a partir del ejemplo que hemos visto en clase. Puedes partir desde el código de la última versión del ejercicio tal y como lo hemos trabajado en clase, o bien puedes escribir el código desde cero.
+
+La temática de base del ejercicio, debe respetar el ejercicio de clase. Por ejemplo: Si en clase hemos hecho una tienda online de zapatillas, tienes que hacer una tienda online, pero de lo que tu quieras.
+
+Recuerda que la evaluación se fundamenta en dos pilares: 1.-Realización de modificaciones estéticas y visuales 2.-Realización de modificaciones funcionales (código y base de datos)
+
+Recuerda justificar tu proyecto desde: -Los lenguajes de marcas usados -Los lenguajes de programación utilizados -Las bases de datos empleadas -Entornos de desarrollo, a nivel de documentación y Github -Sistemas informáticos a nivel de servidor de destino, compatibildad de sistema, requerimientos de hardware software para que funcione -Intermodularidad, explicad cual es la conexión entre las diferentes piezas
+
+Recuerda seguir la rúbrica de evaluación, con respecto a los cuatro puntos de siempre
+
+
+
+Respuesta:
+
+
+En este proyecto he creado una página web para una protectora de animales usando diferentes herramientas que hemos visto en clase. He utilizado un archivo XML para organizar todo el contenido (textos, secciones e imágenes) y un programa en Python para convertir ese contenido en una página web real.
+
+Además, he usado Inteligencia Artificial para generar automáticamente las imágenes de la web. Para ello, el programa lee el XML, crea descripciones con un modelo de lenguaje (Ollama) y después genera imágenes con Stable Diffusion. Así, la página no solo tiene contenido escrito, sino también imágenes creadas automáticamente.
+
+
+1. Creo yo estos archivos:
+
+generate_assets.py:
+
+Es el script principal.
+Lee el XML, genera prompts con Ollama, crea imágenes con Stable Diffusion y actualiza el XML con las nuevas imágenes generadas.
+
+```
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import json
+import re
+import requests
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import torch
+from diffusers import StableDiffusionPipeline
+
+
+# =========================
+# CONFIG
+# =========================
+XML_FILE = "producto.xml"
+UPDATED_XML_FILE = "producto.updated.xml"
+OUTPUT_DIR = "generated_images"
+
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+OLLAMA_MODEL = "llama3"
+OLLAMA_TIMEOUT = 300
+
+MODEL_ID = "runwayml/stable-diffusion-v1-5"
+
+STEPS = 30
+GUIDANCE = 7.5
+SEED_BASE = 12345
+
+# Resoluciones optimizadas para 6GB (RTX 4050)
+SECTION_SIZE = {
+    "hero": (768, 432),
+    "problem": (768, 432),
+    "solution": (768, 432),
+    "features": (640, 640),
+    "benefits": (768, 432),
+    "cta": (768, 432),
+    "misc": (768, 432),
+}
+
+
+# =========================
+# UTILIDADES
+# =========================
+def slugify(s: str, maxlen: int = 80) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^\w\s-]", "", s, flags=re.UNICODE)
+    s = re.sub(r"[\s_-]+", "-", s)
+    s = s.strip("-") or "image"
+    return s[:maxlen]
+
+
+def safe_filename(section: str, alt: str) -> str:
+    return f"{slugify(section)}-{slugify(alt)}.png"
+
+
+def build_context(root: ET.Element) -> dict:
+    def get_text(path: str) -> str:
+        el = root.find(path)
+        return (el.text or "").strip() if el is not None and el.text else ""
+
+    return {
+        "title": get_text("./meta/title"),
+        "category": get_text("./meta/category"),
+        "slug": get_text("./meta/slug"),
+        "valueProposition": get_text("./hero/valueProposition"),
+        "subtitle": get_text("./hero/subtitle"),
+        "style": {
+            "look": "clean, warm, modern animal shelter landing, cinematic lighting, ultra detailed",
+            "avoid": "text, letters, logos, watermark",
+        }
+    }
+
+
+def collect_images(root: ET.Element):
+    section_paths = {
+        "hero": "./hero",
+        "problem": "./problem",
+        "solution": "./solution",
+        "features": "./keyFeatures",
+        "benefits": "./benefits",
+        "cta": "./finalCTA",
+    }
+
+    items = []
+
+    for section, path in section_paths.items():
+        el = root.find(path)
+        if el is None:
+            continue
+        for img in el.findall(".//image"):
+            items.append({
+                "element": img,
+                "section": section,
+                "src": (img.attrib.get("src") or "").strip(),
+                "alt": (img.attrib.get("alt") or "").strip(),
+            })
+
+    if not items:
+        for img in root.findall(".//image"):
+            items.append({
+                "element": img,
+                "section": "misc",
+                "src": (img.attrib.get("src") or "").strip(),
+                "alt": (img.attrib.get("alt") or "").strip(),
+            })
+
+    return items
+
+
+# =========================
+# OLLAMA JSON ROBUSTO
+# =========================
+def ollama_generate_json(system: str, user: str) -> dict:
+
+    def extract_json(t: str) -> str:
+        start = t.find("{")
+        end = t.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return t[start:end+1]
+        return t
+
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": user,
+        "system": system,
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }
+
+    r = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT)
+    r.raise_for_status()
+    raw = (r.json().get("response") or "").strip()
+    js = extract_json(raw)
+
+    try:
+        return json.loads(js)
+    except json.JSONDecodeError:
+        # Reintento forzando JSON estricto
+        payload["options"]["temperature"] = 0.0
+        payload["prompt"] = user + "\n\nRESPONDE SOLO CON JSON VÁLIDO. SIN TEXTO EXTRA."
+        r2 = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT)
+        r2.raise_for_status()
+        raw2 = (r2.json().get("response") or "").strip()
+        js2 = extract_json(raw2)
+        return json.loads(js2)
+
+
+def ask_prompts(context: dict, images):
+
+    system = (
+        "Eres un generador de prompts para Stable Diffusion. "
+        "Debes devolver SOLO JSON válido. "
+        "Sin texto adicional. Sin markdown."
+    )
+
+    req = [{"id": i+1, "section": x["section"], "alt": x["alt"]} for i, x in enumerate(images)]
+
+    user = (
+        f"Contexto:\n{json.dumps(context, ensure_ascii=False, indent=2)}\n\n"
+        "Devuelve JSON con este formato:\n"
+        '{"images":[{"id":1,"prompt":"...","negative_prompt":"..."}]}\n\n'
+        f"Lista:\n{json.dumps(req, ensure_ascii=False, indent=2)}\n\n"
+        "Prompt en INGLÉS. Negative prompt fuerte contra texto, logos y watermarks.\n"
+        "Devuelve SOLO JSON."
+    )
+
+    data = ollama_generate_json(system, user)
+    by_id = {d["id"]: d for d in data.get("images", []) if "id" in d}
+
+    results = []
+
+    for i in range(1, len(images)+1):
+        d = by_id.get(i, {})
+        prompt = d.get("prompt") or "warm animal shelter, cinematic lighting, ultra detailed photo"
+        neg = d.get("negative_prompt") or "text, letters, watermark, logo, brand, blurry"
+        results.append({"prompt": prompt, "negative_prompt": neg})
+
+    return results
+
+
+# =========================
+# STABLE DIFFUSION
+# =========================
+def load_pipe():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+
+    pipe = StableDiffusionPipeline.from_pretrained(
+        MODEL_ID,
+        torch_dtype=dtype,
+        safety_checker=None,
+    ).to(device)
+
+    if device == "cuda":
+        try:
+            pipe.enable_xformers_memory_efficient_attention()
+        except Exception:
+            pass
+        pipe.enable_attention_slicing()
+        try:
+            pipe.enable_vae_slicing()
+        except Exception:
+            pass
+
+    return pipe
+
+
+# =========================
+# MAIN
+# =========================
+def main():
+    tree = ET.parse(XML_FILE)
+    root = tree.getroot()
+
+    context = build_context(root)
+    images = collect_images(root)
+
+    print(f"Encontradas {len(images)} imágenes en XML.")
+    print("Pidiendo prompts a Ollama...")
+
+    prompts = ask_prompts(context, images)
+
+    print("Cargando Stable Diffusion...")
+    pipe = load_pipe()
+
+    out_dir = Path(OUTPUT_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for idx, (img_info, pr) in enumerate(zip(images, prompts), start=1):
+
+        section = img_info["section"]
+        alt = img_info["alt"] or f"image-{idx}"
+        filename = safe_filename(section, alt)
+        out_path = out_dir / filename
+
+        if not out_path.exists():
+            w, h = SECTION_SIZE.get(section, SECTION_SIZE["misc"])
+            seed = SEED_BASE + idx
+            gen_device = "cuda" if pipe.device.type == "cuda" else "cpu"
+            g = torch.Generator(gen_device).manual_seed(seed)
+
+            print(f"[{idx}/{len(images)}] Generando {filename} ({w}x{h})")
+
+            result = pipe(
+                prompt=pr["prompt"],
+                negative_prompt=pr["negative_prompt"],
+                num_inference_steps=STEPS,
+                guidance_scale=GUIDANCE,
+                width=w,
+                height=h,
+                generator=g,
+            )
+
+            result.images[0].save(out_path)
+
+        img_info["element"].set("src", str(Path(OUTPUT_DIR) / filename))
+
+    tree.write(UPDATED_XML_FILE, encoding="utf-8", xml_declaration=True)
+
+    print(f"\n✔ XML actualizado guardado en {UPDATED_XML_FILE}")
+    print("✔ Imágenes generadas en carpeta generated_images/")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+build_site.py:
+
+Convierte el XML actualizado en una página web real.
+Genera automáticamente el index.html, copia las imágenes y aplica los estilos.
+
+```
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import shutil
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+UPDATED_XML_FILE = "producto.updated.xml"   # usa el xml ya actualizado con tus imágenes
+SITE_DIR = Path("site")
+
+def text(el, path):
+    node = el.find(path)
+    return (node.text or "").strip() if node is not None and node.text else ""
+
+def main():
+    if not Path(UPDATED_XML_FILE).exists():
+        raise FileNotFoundError("Primero ejecuta generate_assets.py para crear producto.updated.xml")
+
+    SITE_DIR.mkdir(parents=True, exist_ok=True)
+    (SITE_DIR / "assets").mkdir(parents=True, exist_ok=True)
+    (SITE_DIR / "images").mkdir(parents=True, exist_ok=True)
+
+    # Copia imágenes generadas dentro de la web
+    gen_dir = Path("generated_images")
+    if gen_dir.exists():
+        for f in gen_dir.glob("*.png"):
+            shutil.copy2(f, SITE_DIR / "images" / f.name)
+
+    tree = ET.parse(UPDATED_XML_FILE)
+    root = tree.getroot()
+
+    title = text(root, "./meta/title")
+    category = text(root, "./meta/category")
+    value = text(root, "./hero/valueProposition")
+    subtitle = text(root, "./hero/subtitle")
+    hero_img = root.find("./hero/media/image").attrib.get("src", "")
+
+    # Ajusta rutas: generated_images/... -> images/...
+    hero_img = hero_img.replace("generated_images/", "images/")
+
+    html = f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{title}</title>
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="brand">{title}</div>
+    <div class="pill">{category}</div>
+    <button id="themeBtn" class="btn">Modo oscuro</button>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="heroText">
+        <h1>{value}</h1>
+        <p>{subtitle}</p>
+        <div class="actions">
+          <a class="btn primary" href="#cta">Adoptar</a>
+          <a class="btn" href="#cta">Donar</a>
+        </div>
+      </div>
+      <div class="heroMedia">
+        <img src="{hero_img}" alt="hero" />
+      </div>
+    </section>
+
+    {render_section(root, "problem", "problem")}
+    {render_section(root, "solution", "solution")}
+    {render_section(root, "keyFeatures", "features")}
+    {render_section(root, "benefits", "benefits")}
+    {render_section(root, "finalCTA", "cta", anchor="cta")}
+
+  </main>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
+"""
+
+    (SITE_DIR / "index.html").write_text(html, encoding="utf-8")
+
+    # assets
+    (SITE_DIR / "assets" / "style.css").write_text(DEFAULT_CSS, encoding="utf-8")
+    (SITE_DIR / "assets" / "app.js").write_text(DEFAULT_JS, encoding="utf-8")
+
+    print("Web generada en: site/index.html")
+
+def render_section(root, tag, section_name, anchor=None):
+    sec = root.find(f"./{tag}")
+    if sec is None:
+        return ""
+
+    title = (sec.findtext("title") or "").strip()
+    img_el = sec.find("./media/image")
+    img_src = (img_el.attrib.get("src") if img_el is not None else "") or ""
+    img_src = img_src.replace("generated_images/", "images/")
+
+    body = ""
+
+    if tag == "problem":
+        items = [ (x.text or "").strip() for x in sec.findall("./items/item") ]
+        body = "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
+
+    if tag == "solution":
+        overview = (sec.findtext("overview") or "").strip()
+        changes = [ (x.text or "").strip() for x in sec.findall("./whatChanges/change") ]
+        body = f"<p>{overview}</p>" + "<ul>" + "".join(f"<li>{c}</li>" for c in changes) + "</ul>"
+
+    if tag == "keyFeatures":
+        feats = []
+        for f in sec.findall("./feature"):
+            n = (f.findtext("name") or "").strip()
+            b = (f.findtext("benefit") or "").strip()
+            feats.append((n, b))
+        body = "<div class='grid'>" + "".join(
+            f"<div class='card'><h3>{n}</h3><p>{b}</p></div>" for n,b in feats
+        ) + "</div>"
+
+    if tag == "benefits":
+        items = [ (x.text or "").strip() for x in sec.findall("./items/item") ]
+        body = "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
+
+    if tag == "finalCTA":
+        desc = (sec.findtext("description") or "").strip()
+        body = f"<p>{desc}</p><div class='actions'><a class='btn primary' href='#'>Adoptar</a><a class='btn' href='#'>Donar</a></div>"
+
+    a = f" id='{anchor}'" if anchor else ""
+    return f"""
+<section class="section"{a}>
+  <div class="sectionHead">
+    <h2>{title}</h2>
+  </div>
+  <div class="sectionBody">
+    <div class="sectionMedia"><img src="{img_src}" alt="{section_name}" /></div>
+    <div class="sectionContent">{body}</div>
+  </div>
+</section>
+"""
+
+DEFAULT_CSS = """
+:root{--bg:#0b0c10;--card:#11131a;--text:#e8eaf0;--muted:#b6bccb;--primary:#7ee081;--border:#242838;}
+body.light{--bg:#f6f7fb;--card:#ffffff;--text:#121318;--muted:#4b5563;--primary:#1f7a3a;--border:#e5e7eb;}
+*{box-sizing:border-box} body{margin:0;font-family:system-ui,Arial;background:var(--bg);color:var(--text);}
+.container{max-width:1100px;margin:0 auto;padding:24px;}
+.nav{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);}
+.brand{font-weight:700} .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;color:var(--muted)}
+.btn{border:1px solid var(--border);background:transparent;color:var(--text);padding:10px 14px;border-radius:10px;cursor:pointer;text-decoration:none;display:inline-block}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#0b0c10;font-weight:700}
+.hero{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;align-items:center;margin-top:18px}
+.heroMedia img{width:100%;border-radius:18px;border:1px solid var(--border)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.section{margin:34px 0;padding:18px;border:1px solid var(--border);border-radius:18px;background:var(--card)}
+.sectionBody{display:grid;grid-template-columns:.9fr 1.1fr;gap:16px;align-items:start}
+.sectionMedia img{width:100%;border-radius:14px;border:1px solid var(--border)}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.card{padding:14px;border:1px solid var(--border);border-radius:14px;background:transparent}
+h1{font-size:38px;line-height:1.05;margin:0} h2{margin:0 0 12px} h3{margin:0 0 6px}
+p{color:var(--muted);margin:10px 0}
+ul{margin:0;padding-left:18px;color:var(--muted)} li{margin:8px 0}
+@media (max-width:900px){.hero,.sectionBody{grid-template-columns:1fr}.grid{grid-template-columns:1fr} h1{font-size:30px}}
+"""
+
+DEFAULT_JS = """
+const btn = document.getElementById('themeBtn');
+const key = 'theme_light';
+function apply() {
+  const isLight = localStorage.getItem(key) === '1';
+  document.body.classList.toggle('light', isLight);
+  btn.textContent = isLight ? 'Modo oscuro' : 'Modo claro';
+}
+btn?.addEventListener('click', () => {
+  const isLight = localStorage.getItem(key) === '1';
+  localStorage.setItem(key, isLight ? '0' : '1');
+  apply();
+});
+apply();
+"""
+
+if __name__ == "__main__":
+    main()
+```
+
+producto.xml:
+
+Es el archivo donde defino todo el contenido de la página (títulos, textos, secciones e imágenes). Funciona como la estructura base de la web en formato XML.
+
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<productPage lang="es" type="protectoraAnimales" version="1.1">
+  <meta>
+    <slug>refugio-huellas</slug>
+    <title>Refugio Huellas</title>
+    <category>Protectora y adopción responsable</category>
+    <audience>
+      <segment>Personas adoptantes</segment>
+      <segment>Voluntariado</segment>
+      <segment>Donantes</segment>
+      <segment>Empresas colaboradoras</segment>
+    </audience>
+    <ctaPrimary>Adoptar</ctaPrimary>
+    <ctaSecondary>Donar</ctaSecondary>
+  </meta>
+
+  <hero>
+    <media>
+      <image src="https://example.com/hero.jpg" alt="perro y gato en un refugio luminoso, cálido y esperanzador"/>
+    </media>
+    <name>Refugio Huellas</name>
+    <valueProposition>Rescatamos, cuidamos y buscamos hogar para animales que lo necesitan.</valueProposition>
+    <subtitle>Adopción responsable, atención veterinaria y acompañamiento para que cada historia termine en familia.</subtitle>
+    <badges>
+      <badge>Adopción responsable</badge>
+      <badge>Cuidados veterinarios</badge>
+      <badge>Voluntariado</badge>
+    </badges>
+    <actions>
+      <action type="primary">Adoptar</action>
+      <action type="secondary">Donar</action>
+      <action type="tertiary">Ser voluntario/a</action>
+    </actions>
+  </hero>
+
+  <problem>
+    <media>
+      <image src="https://example.com/problem.jpg" alt="animales rescatados en un entorno seguro, necesidad de ayuda"/>
+    </media>
+    <title>La realidad que afrontamos cada día</title>
+    <items>
+      <item>Abandonos y camadas no deseadas que saturan refugios.</item>
+      <item>Falta de recursos para alimento, medicación y esterilizaciones.</item>
+      <item>Animales con miedo que necesitan socialización y calma.</item>
+      <item>Adopciones sin seguimiento que acaban en devoluciones.</item>
+      <item>Escasez de voluntariado estable y casas de acogida.</item>
+    </items>
+  </problem>
+
+  <solution>
+    <media>
+      <image src="https://example.com/solution.jpg" alt="voluntariado cuidando animales, organización y confianza"/>
+    </media>
+    <title>Nuestra forma de ayudar</title>
+    <overview>
+      Trabajamos con un enfoque integral: rescate, veterinaria, socialización y adopción responsable,
+      acompañando a las familias para asegurar una adaptación positiva y duradera.
+    </overview>
+    <whatChanges>
+      <change>Atención veterinaria desde el primer día.</change>
+      <change>Procesos de adopción claros y con asesoramiento.</change>
+      <change>Red de acogidas y voluntariado para dar oportunidades reales.</change>
+    </whatChanges>
+  </solution>
+
+  <keyFeatures>
+    <media>
+      <image src="https://example.com/features.jpg" alt="metáfora de cuidado y organización, estilo limpio y cálido"/>
+    </media>
+    <title>Qué hacemos</title>
+    <feature>
+      <name>Rescate y acogida</name>
+      <benefit>Actuamos ante avisos y buscamos hogares temporales seguros.</benefit>
+    </feature>
+    <feature>
+      <name>Atención veterinaria</name>
+      <benefit>Vacunas, curas, desparasitación y esterilización cuando corresponde.</benefit>
+    </feature>
+    <feature>
+      <name>Rehabilitación</name>
+      <benefit>Socialización y apoyo para superar miedos.</benefit>
+    </feature>
+    <feature>
+      <name>Adopción responsable</name>
+      <benefit>Entrevista, contrato y seguimiento.</benefit>
+    </feature>
+  </keyFeatures>
+
+  <benefits>
+    <media>
+      <image src="https://example.com/benefits.jpg" alt="final feliz, adopción en un hogar acogedor"/>
+    </media>
+    <title>Impacto real</title>
+    <items>
+      <item>Más rescates y más adopciones seguras.</item>
+      <item>Menos devoluciones gracias al acompañamiento.</item>
+      <item>Mejor bienestar animal con atención veterinaria.</item>
+      <item>Comunidad local implicada y solidaria.</item>
+      <item>Transparencia en el uso de donaciones.</item>
+    </items>
+  </benefits>
+
+  <finalCTA>
+    <media>
+      <image src="https://example.com/cta.jpg" alt="llamada a la acción solidaria, esperanza y calidez"/>
+    </media>
+    <title>¿Nos ayudas a ayudar?</title>
+    <description>Adopta, dona o hazte voluntario/a. Cada gesto cambia una vida.</description>
+    <actions>
+      <action type="primary">Adoptar</action>
+      <action type="secondary">Donar</action>
+    </actions>
+    <contact>
+      <email>contacto@refugiohuellas.org</email>
+    </contact>
+  </finalCTA>
+</productPage>
+```
+
+requeriments.txt:
+
+Es el archivo donde indico todas las librerías necesarias para que el proyecto funcione correctamente.
+
+```
+requests
+diffusers
+transformers
+accelerate
+safetensors
+pillow
+torch
+torchvision
+```
+
+readme.md:
+
+## Protectora Landing (XML + Ollama + Stable Diffusion)
+
+### 1) Requisitos
+- Python 3.10+
+- Ollama instalado y corriendo
+- (Opcional) GPU CUDA para acelerar
+
+### 2) Crear entorno e instalar
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+
+
+
+2. Terminal:
+```
+(venv) serena@serena-portatil:/var/www/html/DAM/proyectos final de unidad/sistemas/protectora$ python generate_assets.py
+Encontradas 6 imágenes en XML.
+Pidiendo prompts a Ollama...
+Cargando Stable Diffusion...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights: 100%|█| 196/196 [00:00<00:00, 538.45it/s, Materializing par
+CLIPTextModel LOAD REPORT from: /home/serena/.cache/huggingface/hub/models--runwayml--stable-diffusion-v1-5/snapshots/451f4fe16113bff5a5d2269ed5ad43b0592e9a14/text_encoder
+Key                                | Status     |  | 
+-----------------------------------+------------+--+-
+text_model.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED	:can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+Loading pipeline components...: 100%|█████████| 6/6 [00:02<00:00,  2.31it/s]
+You have disabled the safety checker for <class 'diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline'> by passing `safety_checker=None`. Ensure that you abide to the conditions of the Stable Diffusion license and do not expose unfiltered results in services or applications open to the public. Both the diffusers team and Hugging Face strongly recommend to keep the safety filter enabled in all public facing circumstances, disabling it only for use-cases that involve analyzing network behavior or auditing its results. For more information, please have a look at https://github.com/huggingface/diffusers/pull/254 .
+/var/www/html/DAM/proyectos final de unidad/sistemas/protectora/venv/lib/python3.12/site-packages/diffusers/pipelines/pipeline_utils.py:2186: FutureWarning: `enable_vae_slicing` is deprecated and will be removed in version 0.40.0. Calling `enable_vae_slicing()` on a `StableDiffusionPipeline` is deprecated and this method will be removed in a future version. Please use `pipe.vae.enable_slicing()`.
+  deprecate(
+[1/6] Generando hero-perro-y-gato-en-un-refugio-luminoso-cálido-y-esperanzador.png (768x432)
+100%|███████████████████████████████████████| 30/30 [00:09<00:00,  3.06it/s]
+[2/6] Generando problem-animales-rescatados-en-un-entorno-seguro-necesidad-de-ayuda.png (768x432)
+100%|███████████████████████████████████████| 30/30 [00:09<00:00,  3.11it/s]
+[3/6] Generando solution-voluntariado-cuidando-animales-organización-y-confianza.png (768x432)
+100%|███████████████████████████████████████| 30/30 [00:09<00:00,  3.11it/s]
+[4/6] Generando features-metáfora-de-cuidado-y-organización-estilo-limpio-y-cálido.png (640x640)
+100%|███████████████████████████████████████| 30/30 [00:12<00:00,  2.37it/s]
+[5/6] Generando benefits-final-feliz-adopción-en-un-hogar-acogedor.png (768x432)
+100%|███████████████████████████████████████| 30/30 [00:09<00:00,  3.10it/s]
+[6/6] Generando cta-llamada-a-la-acción-solidaria-esperanza-y-calidez.png (768x432)
+100%|███████████████████████████████████████| 30/30 [00:09<00:00,  3.10it/s]
+
+✔ XML actualizado guardado en producto.updated.xml
+✔ Imágenes generadas en carpeta generated_images/
+(venv) serena@serena-portatil:/var/www/html/DAM/proyectos final de unidad/sistemas/protectora$ ls -la generated_images
+ls -la producto.updated.xml
+total 3580
+drwxrwxr-x 2 serena serena   4096 feb 11 12:59 .
+drwxrwxr-x 4 serena serena   4096 feb 11 12:59 ..
+-rw-rw-r-- 1 serena serena 625628 feb 11 12:59 benefits-final-feliz-adopción-en-un-hogar-acogedor.png
+-rw-rw-r-- 1 serena serena 531590 feb 11 12:59 cta-llamada-a-la-acción-solidaria-esperanza-y-calidez.png
+-rw-rw-r-- 1 serena serena 753104 feb 11 12:59 features-metáfora-de-cuidado-y-organización-estilo-limpio-y-cálido.png
+-rw-rw-r-- 1 serena serena 551817 feb 11 12:58 hero-perro-y-gato-en-un-refugio-luminoso-cálido-y-esperanzador.png
+-rw-rw-r-- 1 serena serena 555769 feb 11 12:58 problem-animales-rescatados-en-un-entorno-seguro-necesidad-de-ayuda.png
+-rw-rw-r-- 1 serena serena 632923 feb 11 12:58 solution-voluntariado-cuidando-animales-organización-y-confianza.png
+-rw-rw-r-- 1 serena serena 4755 feb 11 12:59 producto.updated.xml
+(venv) serena@serena-portatil:/var/www/html/DAM/proyectos final de unidad/sistemas/protectora$ python build_site.py
+Web generada en: site/index.html
+(venv) serena@serena-portatil:/var/www/html/DAM/proyectos final de unidad/sistemas/protectora$ cd site
+python -m http.server 8000
+Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /assets/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /images/hero-perro-y-gato-en-un-refugio-luminoso-c%C3%A1lido-y-esperanzador.png HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /images/problem-animales-rescatados-en-un-entorno-seguro-necesidad-de-ayuda.png HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /assets/app.js HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /images/solution-voluntariado-cuidando-animales-organizaci%C3%B3n-y-confianza.png HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /images/features-met%C3%A1fora-de-cuidado-y-organizaci%C3%B3n-estilo-limpio-y-c%C3%A1lido.png HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /images/benefits-final-feliz-adopci%C3%B3n-en-un-hogar-acogedor.png HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /images/cta-llamada-a-la-acci%C3%B3n-solidaria-esperanza-y-calidez.png HTTP/1.1" 200 -
+127.0.0.1 - - [11/Feb/2026 13:01:16] code 404, message File not found
+127.0.0.1 - - [11/Feb/2026 13:01:16] "GET /favicon.ico HTTP/1.1" 404 -
+```
+
+
+
+3. Se han generado:
+
+Imagenes:
+https://files.fm/u/pv2m8hvhdt
+
+producto.updated.xml:
+```
+<?xml version='1.0' encoding='utf-8'?>
+<productPage lang="es" type="protectoraAnimales" version="1.1">
+  <meta>
+    <slug>refugio-huellas</slug>
+    <title>Refugio Huellas</title>
+    <category>Protectora y adopción responsable</category>
+    <audience>
+      <segment>Personas adoptantes</segment>
+      <segment>Voluntariado</segment>
+      <segment>Donantes</segment>
+      <segment>Empresas colaboradoras</segment>
+    </audience>
+    <ctaPrimary>Adoptar</ctaPrimary>
+    <ctaSecondary>Donar</ctaSecondary>
+  </meta>
+
+  <hero>
+    <media>
+      <image src="generated_images/hero-perro-y-gato-en-un-refugio-luminoso-cálido-y-esperanzador.png" alt="perro y gato en un refugio luminoso, cálido y esperanzador" />
+    </media>
+    <name>Refugio Huellas</name>
+    <valueProposition>Rescatamos, cuidamos y buscamos hogar para animales que lo necesitan.</valueProposition>
+    <subtitle>Adopción responsable, atención veterinaria y acompañamiento para que cada historia termine en familia.</subtitle>
+    <badges>
+      <badge>Adopción responsable</badge>
+      <badge>Cuidados veterinarios</badge>
+      <badge>Voluntariado</badge>
+    </badges>
+    <actions>
+      <action type="primary">Adoptar</action>
+      <action type="secondary">Donar</action>
+      <action type="tertiary">Ser voluntario/a</action>
+    </actions>
+  </hero>
+
+  <problem>
+    <media>
+      <image src="generated_images/problem-animales-rescatados-en-un-entorno-seguro-necesidad-de-ayuda.png" alt="animales rescatados en un entorno seguro, necesidad de ayuda" />
+    </media>
+    <title>La realidad que afrontamos cada día</title>
+    <items>
+      <item>Abandonos y camadas no deseadas que saturan refugios.</item>
+      <item>Falta de recursos para alimento, medicación y esterilizaciones.</item>
+      <item>Animales con miedo que necesitan socialización y calma.</item>
+      <item>Adopciones sin seguimiento que acaban en devoluciones.</item>
+      <item>Escasez de voluntariado estable y casas de acogida.</item>
+    </items>
+  </problem>
+
+  <solution>
+    <media>
+      <image src="generated_images/solution-voluntariado-cuidando-animales-organización-y-confianza.png" alt="voluntariado cuidando animales, organización y confianza" />
+    </media>
+    <title>Nuestra forma de ayudar</title>
+    <overview>
+      Trabajamos con un enfoque integral: rescate, veterinaria, socialización y adopción responsable,
+      acompañando a las familias para asegurar una adaptación positiva y duradera.
+    </overview>
+    <whatChanges>
+      <change>Atención veterinaria desde el primer día.</change>
+      <change>Procesos de adopción claros y con asesoramiento.</change>
+      <change>Red de acogidas y voluntariado para dar oportunidades reales.</change>
+    </whatChanges>
+  </solution>
+
+  <keyFeatures>
+    <media>
+      <image src="generated_images/features-metáfora-de-cuidado-y-organización-estilo-limpio-y-cálido.png" alt="metáfora de cuidado y organización, estilo limpio y cálido" />
+    </media>
+    <title>Qué hacemos</title>
+    <feature>
+      <name>Rescate y acogida</name>
+      <benefit>Actuamos ante avisos y buscamos hogares temporales seguros.</benefit>
+    </feature>
+    <feature>
+      <name>Atención veterinaria</name>
+      <benefit>Vacunas, curas, desparasitación y esterilización cuando corresponde.</benefit>
+    </feature>
+    <feature>
+      <name>Rehabilitación</name>
+      <benefit>Socialización y apoyo para superar miedos.</benefit>
+    </feature>
+    <feature>
+      <name>Adopción responsable</name>
+      <benefit>Entrevista, contrato y seguimiento.</benefit>
+    </feature>
+  </keyFeatures>
+
+  <benefits>
+    <media>
+      <image src="generated_images/benefits-final-feliz-adopción-en-un-hogar-acogedor.png" alt="final feliz, adopción en un hogar acogedor" />
+    </media>
+    <title>Impacto real</title>
+    <items>
+      <item>Más rescates y más adopciones seguras.</item>
+      <item>Menos devoluciones gracias al acompañamiento.</item>
+      <item>Mejor bienestar animal con atención veterinaria.</item>
+      <item>Comunidad local implicada y solidaria.</item>
+      <item>Transparencia en el uso de donaciones.</item>
+    </items>
+  </benefits>
+
+  <finalCTA>
+    <media>
+      <image src="generated_images/cta-llamada-a-la-acción-solidaria-esperanza-y-calidez.png" alt="llamada a la acción solidaria, esperanza y calidez" />
+    </media>
+    <title>¿Nos ayudas a ayudar?</title>
+    <description>Adopta, dona o hazte voluntario/a. Cada gesto cambia una vida.</description>
+    <actions>
+      <action type="primary">Adoptar</action>
+      <action type="secondary">Donar</action>
+    </actions>
+    <contact>
+      <email>contacto@refugiohuellas.org</email>
+    </contact>
+  </finalCTA>
+</productPage>
+```
+
+index.html:
+```
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Refugio Huellas</title>
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="brand">Refugio Huellas</div>
+    <div class="pill">Protectora y adopción responsable</div>
+    <button id="themeBtn" class="btn">Modo oscuro</button>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="heroText">
+        <h1>Rescatamos, cuidamos y buscamos hogar para animales que lo necesitan.</h1>
+        <p>Adopción responsable, atención veterinaria y acompañamiento para que cada historia termine en familia.</p>
+        <div class="actions">
+          <a class="btn primary" href="#cta">Adoptar</a>
+          <a class="btn" href="#cta">Donar</a>
+        </div>
+      </div>
+      <div class="heroMedia">
+        <img src="images/hero-perro-y-gato-en-un-refugio-luminoso-cálido-y-esperanzador.png" alt="hero" />
+      </div>
+    </section>
+
+    
+<section class="section">
+  <div class="sectionHead">
+    <h2>La realidad que afrontamos cada día</h2>
+  </div>
+  <div class="sectionBody">
+    <div class="sectionMedia"><img src="images/problem-animales-rescatados-en-un-entorno-seguro-necesidad-de-ayuda.png" alt="problem" /></div>
+    <div class="sectionContent"><ul><li>Abandonos y camadas no deseadas que saturan refugios.</li><li>Falta de recursos para alimento, medicación y esterilizaciones.</li><li>Animales con miedo que necesitan socialización y calma.</li><li>Adopciones sin seguimiento que acaban en devoluciones.</li><li>Escasez de voluntariado estable y casas de acogida.</li></ul></div>
+  </div>
+</section>
+
+    
+<section class="section">
+  <div class="sectionHead">
+    <h2>Nuestra forma de ayudar</h2>
+  </div>
+  <div class="sectionBody">
+    <div class="sectionMedia"><img src="images/solution-voluntariado-cuidando-animales-organización-y-confianza.png" alt="solution" /></div>
+    <div class="sectionContent"><p>Trabajamos con un enfoque integral: rescate, veterinaria, socialización y adopción responsable,
+      acompañando a las familias para asegurar una adaptación positiva y duradera.</p><ul><li>Atención veterinaria desde el primer día.</li><li>Procesos de adopción claros y con asesoramiento.</li><li>Red de acogidas y voluntariado para dar oportunidades reales.</li></ul></div>
+  </div>
+</section>
+
+    
+<section class="section">
+  <div class="sectionHead">
+    <h2>Qué hacemos</h2>
+  </div>
+  <div class="sectionBody">
+    <div class="sectionMedia"><img src="images/features-metáfora-de-cuidado-y-organización-estilo-limpio-y-cálido.png" alt="features" /></div>
+    <div class="sectionContent"><div class='grid'><div class='card'><h3>Rescate y acogida</h3><p>Actuamos ante avisos y buscamos hogares temporales seguros.</p></div><div class='card'><h3>Atención veterinaria</h3><p>Vacunas, curas, desparasitación y esterilización cuando corresponde.</p></div><div class='card'><h3>Rehabilitación</h3><p>Socialización y apoyo para superar miedos.</p></div><div class='card'><h3>Adopción responsable</h3><p>Entrevista, contrato y seguimiento.</p></div></div></div>
+  </div>
+</section>
+
+    
+<section class="section">
+  <div class="sectionHead">
+    <h2>Impacto real</h2>
+  </div>
+  <div class="sectionBody">
+    <div class="sectionMedia"><img src="images/benefits-final-feliz-adopción-en-un-hogar-acogedor.png" alt="benefits" /></div>
+    <div class="sectionContent"><ul><li>Más rescates y más adopciones seguras.</li><li>Menos devoluciones gracias al acompañamiento.</li><li>Mejor bienestar animal con atención veterinaria.</li><li>Comunidad local implicada y solidaria.</li><li>Transparencia en el uso de donaciones.</li></ul></div>
+  </div>
+</section>
+
+    
+<section class="section" id='cta'>
+  <div class="sectionHead">
+    <h2>¿Nos ayudas a ayudar?</h2>
+  </div>
+  <div class="sectionBody">
+    <div class="sectionMedia"><img src="images/cta-llamada-a-la-acción-solidaria-esperanza-y-calidez.png" alt="cta" /></div>
+    <div class="sectionContent"><p>Adopta, dona o hazte voluntario/a. Cada gesto cambia una vida.</p><div class='actions'><a class='btn primary' href='#'>Adoptar</a><a class='btn' href='#'>Donar</a></div></div>
+  </div>
+</section>
+
+
+  </main>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
+```
+
+style.css:
+```
+
+:root{--bg:#0b0c10;--card:#11131a;--text:#e8eaf0;--muted:#b6bccb;--primary:#7ee081;--border:#242838;}
+body.light{--bg:#f6f7fb;--card:#ffffff;--text:#121318;--muted:#4b5563;--primary:#1f7a3a;--border:#e5e7eb;}
+*{box-sizing:border-box} body{margin:0;font-family:system-ui,Arial;background:var(--bg);color:var(--text);}
+.container{max-width:1100px;margin:0 auto;padding:24px;}
+.nav{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);}
+.brand{font-weight:700} .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;color:var(--muted)}
+.btn{border:1px solid var(--border);background:transparent;color:var(--text);padding:10px 14px;border-radius:10px;cursor:pointer;text-decoration:none;display:inline-block}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#0b0c10;font-weight:700}
+.hero{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;align-items:center;margin-top:18px}
+.heroMedia img{width:100%;border-radius:18px;border:1px solid var(--border)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.section{margin:34px 0;padding:18px;border:1px solid var(--border);border-radius:18px;background:var(--card)}
+.sectionBody{display:grid;grid-template-columns:.9fr 1.1fr;gap:16px;align-items:start}
+.sectionMedia img{width:100%;border-radius:14px;border:1px solid var(--border)}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.card{padding:14px;border:1px solid var(--border);border-radius:14px;background:transparent}
+h1{font-size:38px;line-height:1.05;margin:0} h2{margin:0 0 12px} h3{margin:0 0 6px}
+p{color:var(--muted);margin:10px 0}
+ul{margin:0;padding-left:18px;color:var(--muted)} li{margin:8px 0}
+@media (max-width:900px){.hero,.sectionBody{grid-template-columns:1fr}.grid{grid-template-columns:1fr} h1{font-size:30px}}
+```
+
+app.js:
+```
+const btn = document.getElementById('themeBtn');
+const key = 'theme_light';
+function apply() {
+  const isLight = localStorage.getItem(key) === '1';
+  document.body.classList.toggle('light', isLight);
+  btn.textContent = isLight ? 'Modo oscuro' : 'Modo claro';
+}
+btn?.addEventListener('click', () => {
+  const isLight = localStorage.getItem(key) === '1';
+  localStorage.setItem(key, isLight ? '0' : '1');
+  apply();
+});
+apply();
+```
+
+Con este proyecto he aprendido a conectar diferentes partes de un sistema: el XML como estructura de datos, Python como programa principal, la inteligencia artificial para generar imágenes y la parte web para mostrar el resultado final.
+
+He conseguido que, a partir de un archivo de contenido, se genere automáticamente una página web completa con imágenes incluidas. Esto demuestra que es posible automatizar procesos y que las diferentes tecnologías pueden trabajar juntas dentro de un mismo proyecto.
+
+En resumen, el proyecto me ha ayudado a entender mejor cómo se relacionan los distintos módulos y cómo se puede crear una aplicación más completa combinando varias herramientas.

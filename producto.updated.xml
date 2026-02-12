@@ -1,0 +1,117 @@
+<?xml version='1.0' encoding='utf-8'?>
+<productPage lang="es" type="protectoraAnimales" version="1.1">
+  <meta>
+    <slug>refugio-huellas</slug>
+    <title>Refugio Huellas</title>
+    <category>Protectora y adopción responsable</category>
+    <audience>
+      <segment>Personas adoptantes</segment>
+      <segment>Voluntariado</segment>
+      <segment>Donantes</segment>
+      <segment>Empresas colaboradoras</segment>
+    </audience>
+    <ctaPrimary>Adoptar</ctaPrimary>
+    <ctaSecondary>Donar</ctaSecondary>
+  </meta>
+
+  <hero>
+    <media>
+      <image src="generated_images/hero-perro-y-gato-en-un-refugio-luminoso-cálido-y-esperanzador.png" alt="perro y gato en un refugio luminoso, cálido y esperanzador" />
+    </media>
+    <name>Refugio Huellas</name>
+    <valueProposition>Rescatamos, cuidamos y buscamos hogar para animales que lo necesitan.</valueProposition>
+    <subtitle>Adopción responsable, atención veterinaria y acompañamiento para que cada historia termine en familia.</subtitle>
+    <badges>
+      <badge>Adopción responsable</badge>
+      <badge>Cuidados veterinarios</badge>
+      <badge>Voluntariado</badge>
+    </badges>
+    <actions>
+      <action type="primary">Adoptar</action>
+      <action type="secondary">Donar</action>
+      <action type="tertiary">Ser voluntario/a</action>
+    </actions>
+  </hero>
+
+  <problem>
+    <media>
+      <image src="generated_images/problem-animales-rescatados-en-un-entorno-seguro-necesidad-de-ayuda.png" alt="animales rescatados en un entorno seguro, necesidad de ayuda" />
+    </media>
+    <title>La realidad que afrontamos cada día</title>
+    <items>
+      <item>Abandonos y camadas no deseadas que saturan refugios.</item>
+      <item>Falta de recursos para alimento, medicación y esterilizaciones.</item>
+      <item>Animales con miedo que necesitan socialización y calma.</item>
+      <item>Adopciones sin seguimiento que acaban en devoluciones.</item>
+      <item>Escasez de voluntariado estable y casas de acogida.</item>
+    </items>
+  </problem>
+
+  <solution>
+    <media>
+      <image src="generated_images/solution-voluntariado-cuidando-animales-organización-y-confianza.png" alt="voluntariado cuidando animales, organización y confianza" />
+    </media>
+    <title>Nuestra forma de ayudar</title>
+    <overview>
+      Trabajamos con un enfoque integral: rescate, veterinaria, socialización y adopción responsable,
+      acompañando a las familias para asegurar una adaptación positiva y duradera.
+    </overview>
+    <whatChanges>
+      <change>Atención veterinaria desde el primer día.</change>
+      <change>Procesos de adopción claros y con asesoramiento.</change>
+      <change>Red de acogidas y voluntariado para dar oportunidades reales.</change>
+    </whatChanges>
+  </solution>
+
+  <keyFeatures>
+    <media>
+      <image src="generated_images/features-metáfora-de-cuidado-y-organización-estilo-limpio-y-cálido.png" alt="metáfora de cuidado y organización, estilo limpio y cálido" />
+    </media>
+    <title>Qué hacemos</title>
+    <feature>
+      <name>Rescate y acogida</name>
+      <benefit>Actuamos ante avisos y buscamos hogares temporales seguros.</benefit>
+    </feature>
+    <feature>
+      <name>Atención veterinaria</name>
+      <benefit>Vacunas, curas, desparasitación y esterilización cuando corresponde.</benefit>
+    </feature>
+    <feature>
+      <name>Rehabilitación</name>
+      <benefit>Socialización y apoyo para superar miedos.</benefit>
+    </feature>
+    <feature>
+      <name>Adopción responsable</name>
+      <benefit>Entrevista, contrato y seguimiento.</benefit>
+    </feature>
+  </keyFeatures>
+
+  <benefits>
+    <media>
+      <image src="generated_images/benefits-final-feliz-adopción-en-un-hogar-acogedor.png" alt="final feliz, adopción en un hogar acogedor" />
+    </media>
+    <title>Impacto real</title>
+    <items>
+      <item>Más rescates y más adopciones seguras.</item>
+      <item>Menos devoluciones gracias al acompañamiento.</item>
+      <item>Mejor bienestar animal con atención veterinaria.</item>
+      <item>Comunidad local implicada y solidaria.</item>
+      <item>Transparencia en el uso de donaciones.</item>
+    </items>
+  </benefits>
+
+  <finalCTA>
+    <media>
+      <image src="generated_images/cta-llamada-a-la-acción-solidaria-esperanza-y-calidez.png" alt="llamada a la acción solidaria, esperanza y calidez" />
+    </media>
+    <title>¿Nos ayudas a ayudar?</title>
+    <description>Adopta, dona o hazte voluntario/a. Cada gesto cambia una vida.</description>
+    <actions>
+      <action type="primary">Adoptar</action>
+      <action type="secondary">Donar</action>
+    </actions>
+    <contact>
+      <email>contacto@refugiohuellas.org</email>
+    </contact>
+  </finalCTA>
+</productPage>
